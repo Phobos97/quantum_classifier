@@ -14,9 +14,13 @@ import random
 import matplotlib.pyplot as plt
 from cirq.contrib.svg import SVGCircuit
 
+import sys
+
 # Ansatz hyperparameters
 n_qubits = 8  # needs to be even.
 depth = 2
+n_params = 2 * depth * n_qubits
+
 
 data_points = 1000
 
@@ -76,14 +80,8 @@ x_test_tfcirc = tfq.convert_to_tensor(x_test_circ)
 
 
 class CircuitLayerBuilder():
-    def __init__(self, data_qubits, readout):
+    def __init__(self, data_qubits):
         self.data_qubits = data_qubits
-        self.readout = readout
-
-    def add_layer(self, circuit, gate, prefix):
-        for i, qubit in enumerate(self.data_qubits):
-            symbol = sympy.Symbol(prefix + '-' + str(i))
-            circuit.append(gate(qubit, self.readout)**symbol)
 
     # Layer of single qubit rotations
     def rot_layer(self, circuit, gate, prefix):
@@ -100,45 +98,61 @@ class CircuitLayerBuilder():
 def create_quantum_model(n_qubits):
     """Create a QNN model circuit and readout operation to go along with it."""
     data_qubits = cirq.GridQubit.rect(n_qubits, 1)  # a 4x4 grid.
-    readout = cirq.GridQubit(-1, -1)         # a single qubit at [-1,-1]
     circuit = cirq.Circuit()
 
-    # Prepare the readout qubit.
-    circuit.append(cirq.X(readout))
-    circuit.append(cirq.H(readout))
-
     builder = CircuitLayerBuilder(
-        data_qubits=data_qubits,
-        readout=readout)
-
+        data_qubits=data_qubits
+    )
     # Then add layers (experiment by adding more).
 
     for i in range(depth):
-        builder.rot_layer(circuit, cirq.rz, "rz1")
-        builder.rot_layer(circuit, cirq.ry, "ry1")
+        builder.rot_layer(circuit, cirq.rz, "rz1"+str([i]))
+        builder.rot_layer(circuit, cirq.ry, "ry1"+str([i]))
         builder.entangling_layer(circuit, n_qubits)
 
-    # builder.add_layer(circuit, cirq.XX, "xx1")
-    builder.add_layer(circuit, cirq.ZZ, "zz1")
 
-    # Finally, prepare the readout qubit.
-    circuit.append(cirq.H(readout))
+    return circuit
 
-    return circuit, cirq.Z(readout)
-
-
-model_circuit, model_readout = create_quantum_model(n_qubits)
+model_circuit = create_quantum_model(n_qubits)
 
 print(model_circuit.to_text_diagram(transpose=False))
-print("readout:" + str(model_readout))
 
+
+def predict(circuit, observable):
+    s = cirq.Simulator()
+    simulated = s.simulate(ansatz)
+    psi_x_theta = np.array(simulated.state_vector())
+
+    # this is formula (1) from the Project description
+    step1 = np.matmul(observable, psi_x_theta)
+    f_theta = np.matmul(psi_x_theta.conjugate().transpose(), step1)
+
+    # turning above function into a binary classifier
+    if f_theta.real < 0:
+        return 0
+    else:
+        return 1
+
+
+def binary_classifier(n):
+    if n >= 0:
+        return 1
+    else:
+        return -1
+
+
+measurements = []
+for i, qubit in enumerate(qubits):
+    measurements.append(cirq.Z(qubit))
+
+
+output_layer = tfq.layers.PQC(model_circuit, measurements)
 
 # Build the Keras model.
 model = tf.keras.Sequential([
     # The input is the data-circuit, encoded as a tf.string
     tf.keras.layers.Input(shape=(), dtype=tf.string),
-    # The PQC layer returns the expected value of the readout gate, range [-1,1].
-    tfq.layers.PQC(model_circuit, model_readout),
+    output_layer
 ])
 
 
@@ -162,6 +176,7 @@ model.compile(
 print(model.summary())
 
 NUM_EXAMPLES = len(x_train_tfcirc)
+
 
 qnn_history = model.fit(
       x_train_tfcirc, y_train_hinge,
