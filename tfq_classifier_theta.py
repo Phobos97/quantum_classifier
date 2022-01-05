@@ -11,7 +11,7 @@ from sklearn.datasets import make_moons
 from sklearn.model_selection import train_test_split
 import random
 from functools import reduce
-
+import math
 
 import matplotlib.pyplot as plt
 from cirq.contrib.svg import SVGCircuit
@@ -19,12 +19,10 @@ from cirq.contrib.svg import SVGCircuit
 import sys
 
 # Ansatz hyperparameters
-n_qubits = 8  # needs to be even.
+n_qubits = 2  # needs to be even.
 depth = 2
-n_params = 2 * depth * n_qubits
 
-
-data_points = 1000
+data_points = 20000
 
 qubits = [cirq.GridQubit(i, 0) for i in range(n_qubits)]
 
@@ -57,7 +55,7 @@ def aprox_to_binary(n, bits):
     return result
 
 
-def u_encode(n_qubits, x):
+def u_encode_binary(n_qubits, x):
     if n_qubits % 2 != 0:
         raise ValueError("n_qubits must be even so we can encode the x and y value in the same way.")
     bits_per_float = int(n_qubits / 2)
@@ -74,8 +72,26 @@ def u_encode(n_qubits, x):
     return circuit
 
 
-x_train_circ = [u_encode(n_qubits, x) for x in x_train_bin]
-x_test_circ = [u_encode(n_qubits, x) for x in x_test_bin]
+def u_encode_rot(n_qubits, x):
+    if n_qubits % 2 != 0:
+        raise ValueError("n_qubits must be even so we can encode the x and y value in the same way.")
+    circuit = cirq.Circuit()
+
+    for i in range(len(x)):
+        for k in range(int(n_qubits / 2)):
+            if k % 2 == 0:
+                circuit.append(cirq.ry(x[i] * 2 * math.pi)(qubits[i*int(n_qubits / 2) + k]))
+            else:
+                circuit.append(cirq.rz(x[i] * 2 * math.pi)(qubits[i * int(n_qubits / 2) + k]))
+    return circuit
+
+
+# choose method of encoding data for use in quantum classifier
+# encode_function = u_encode_binary
+encode_function = u_encode_rot
+
+x_train_circ = [encode_function(n_qubits, x) for x in x_train_bin]
+x_test_circ = [encode_function(n_qubits, x) for x in x_test_bin]
 
 x_train_tfcirc = tfq.convert_to_tensor(x_train_circ)
 x_test_tfcirc = tfq.convert_to_tensor(x_test_circ)
@@ -93,6 +109,9 @@ class CircuitLayerBuilder():
 
     # Layer of entangling CZ(i,i+1 % n_qubits) gates.
     def entangling_layer(self, circuit, n_qubits):
+        if n_qubits == 2:
+            circuit.append(cirq.CZ(cirq.GridQubit(0, 0), cirq.GridQubit(1, 0)))
+            return
         for i, qubit in enumerate(self.data_qubits):
             circuit.append(cirq.CZ(cirq.GridQubit(i, 0), cirq.GridQubit((i + 1) % n_qubits, 0)))
 
@@ -108,46 +127,20 @@ def create_quantum_model(n_qubits):
     # Then add layers (experiment by adding more).
 
     for i in range(depth):
-        builder.rot_layer(circuit, cirq.rz, "rz1"+str([i]))
-        builder.rot_layer(circuit, cirq.ry, "ry1"+str([i]))
+        builder.rot_layer(circuit, cirq.rz, "rz" + str(i))
+        builder.rot_layer(circuit, cirq.ry, "ry" + str(i))
         builder.entangling_layer(circuit, n_qubits)
 
-
     return circuit
+
 
 model_circuit = create_quantum_model(n_qubits)
 
 print(model_circuit.to_text_diagram(transpose=False))
 
 
-def predict(circuit, observable):
-    s = cirq.Simulator()
-    simulated = s.simulate(ansatz)
-    psi_x_theta = np.array(simulated.state_vector())
-
-    # this is formula (1) from the Project description
-    step1 = np.matmul(observable, psi_x_theta)
-    f_theta = np.matmul(psi_x_theta.conjugate().transpose(), step1)
-
-    # turning above function into a binary classifier
-    if f_theta.real < 0:
-        return 0
-    else:
-        return 1
-
-
-def binary_classifier(n):
-    if n >= 0:
-        return 1
-    else:
-        return -1
-
-
-measurements = []
-for i, qubit in enumerate(qubits):
-    measurements.append(cirq.Z(qubit))
-
-observables = [reduce((lambda x, y: x * y), measurements)]
+ops = [cirq.Z(q) for q in qubits]
+observables = [reduce((lambda x, y: x * y), ops)]
 
 output_layer = tfq.layers.PQC(model_circuit, observables)
 
@@ -183,12 +176,13 @@ NUM_EXAMPLES = len(x_train_tfcirc)
 
 qnn_history = model.fit(
       x_train_tfcirc, y_train_hinge,
-      batch_size=64,
+      batch_size=32,
       epochs=10,
       verbose=1,
       validation_data=(x_test_tfcirc, y_test_hinge))
 
 qnn_results = model.evaluate(x_test_tfcirc, y_test)
 
-
+print(model.predict(x_test_tfcirc))
+print(y_test)
 
