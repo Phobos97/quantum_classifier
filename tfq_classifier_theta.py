@@ -10,6 +10,8 @@ import collections
 from sklearn.datasets import make_moons
 from sklearn.model_selection import train_test_split
 import random
+from functools import reduce
+
 
 import matplotlib.pyplot as plt
 from cirq.contrib.svg import SVGCircuit
@@ -145,8 +147,9 @@ measurements = []
 for i, qubit in enumerate(qubits):
     measurements.append(cirq.Z(qubit))
 
+observables = [reduce((lambda x, y: x * y), measurements)]
 
-output_layer = tfq.layers.PQC(model_circuit, measurements)
+output_layer = tfq.layers.PQC(model_circuit, observables)
 
 # Build the Keras model.
 model = tf.keras.Sequential([
