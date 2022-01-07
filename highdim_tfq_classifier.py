@@ -164,8 +164,6 @@ def create_mnist_dataset(pixels):
     return pixels**2, x_train_nocon, y_train_nocon, x_test_small, y_test
 
 
-
-
 def prepare_dataset(choice):
     if (choice == 'moons'):
         return create_moons_dataset(20000)
@@ -174,6 +172,7 @@ def prepare_dataset(choice):
     else:
         print('invalid dataset choice')
         sys.exit()
+
 
 def select_encoding_method(choice):
     if (choice == 'rot'):
@@ -184,19 +183,22 @@ def select_encoding_method(choice):
         print('invalid encoder choice')
         sys.exit()
 
+
 def main():
     args = sys.argv[1:]
     if (len(args) != 4):
         print('invalid arguments: [dataset] [encoder] [n_qubits] [depth]')
-        return
-
-    dataset = args[0]
-    encoder = args[1]
-    n_qubits = int(args[2])
-    depth = int(args[3])
+        dataset = "mnist"
+        encoder = "rot"
+        n_qubits = 4
+        depth = 2
+    else:
+        dataset = args[0]
+        encoder = args[1]
+        n_qubits = int(args[2])
+        depth = int(args[3])
 
     datapoints = -1
-
 
     dim, x_train, y_train, x_test, y_test = prepare_dataset(dataset)
     y_train = y_train[0:datapoints]
@@ -209,8 +211,6 @@ def main():
 
     x_train_bin = np.array(x_train, dtype=np.float32).reshape(-1, dim)[0:datapoints]
     x_test_bin = np.array(x_test, dtype=np.float32).reshape(-1, dim)[0:datapoints]
-
-    print(x_train_bin)
 
     # choose method of encoding data for use in quantum classifier
     encode_function = select_encoding_method(encoder)
@@ -229,7 +229,7 @@ def main():
 
     ops = [cirq.Z(q) for q in qubits]
 
-    observables_l = [ops[x:x + n_qubits] for x in range(l)]
+    observables_l = [ops[x*n_qubits:x*n_qubits + n_qubits] for x in range(l)]
 
     observables = []
 
@@ -237,17 +237,24 @@ def main():
 
     for i, observable in enumerate(observables_l):
         alpha.append(sympy.Symbol('alpha'+str(i)))
-        observables.append([reduce((lambda x, y: x * y), observable)])
+        observables.append(reduce((lambda x, y: x * y), observable))
 
-    # do not remove
+    print(observables)
+
     observables = reduce((lambda x, y: x + y), observables)
-    observables = reduce((lambda x, y: x + y), observables)
+    print(observables)
+
+    # the observables is a PauliSum
+    print(type(observables))
+    # each term in the observable is a PauliString
+    for term in observables:
+        print(term)
+        print(term.coefficient)
 
     output_layer = tfq.layers.PQC(model_circuit, observables)
 
     # Build the Keras model.
     model = tf.keras.Sequential([
-        # The input is the data-circuit, encoded as a tf.string
         tf.keras.layers.Input(shape=(), dtype=tf.string),
         output_layer
     ])
@@ -261,8 +268,6 @@ def main():
         metrics=[hinge_accuracy])
 
     print(model.summary())
-
-    NUM_EXAMPLES = len(x_train_tfcirc)
 
     qnn_history = model.fit(
         x_train_tfcirc, y_train_hinge,
