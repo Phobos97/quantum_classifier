@@ -69,13 +69,7 @@ def u_encode_rot(n_qubits, qubits, x):
     circuit = cirq.Circuit()
 
     for i in range(len(x)):
-        for k in range(int(n_qubits / 2)):
-            if k % 2 == 0:
-                circuit.append(cirq.ry(x[i] * 2 * math.pi)
-                               (qubits[i*int(n_qubits / 2) + k]))
-            else:
-                circuit.append(cirq.rz(x[i] * 2 * math.pi)
-                               (qubits[i * int(n_qubits / 2) + k]))
+        circuit.append(cirq.ry(x[i] * 2 * math.pi)(qubits[i]))
     return circuit
 
 
@@ -90,18 +84,18 @@ class CircuitLayerBuilder():
             circuit.append(gate(symbol)(qubit))
 
     # Layer of entangling CZ(i,i+1 % n_qubits) gates.
-    def entangling_layer(self, circuit, n_qubits):
-        if n_qubits == 2:
-            circuit.append(cirq.CZ(cirq.GridQubit(0, 0), cirq.GridQubit(1, 0)))
-            return
-        for i, qubit in enumerate(self.data_qubits):
-            circuit.append(cirq.CZ(cirq.GridQubit(i, 0),
-                           cirq.GridQubit((i + 1) % n_qubits, 0)))
+    def entangling_layer(self, circuit, n_qubits, l):
+        for j in range(l):
+            if n_qubits == 2:
+                circuit.append(cirq.CZ(cirq.GridQubit(j*n_qubits, 0), cirq.GridQubit(j*n_qubits + 1, 0)))
+            else:
+                for i in range(n_qubits):
+                    circuit.append(cirq.CZ(cirq.GridQubit(i + j*n_qubits, 0), cirq.GridQubit((i + 1) % n_qubits + j*n_qubits, 0)))
 
 
-def create_quantum_model(n_qubits, depth):
+def create_quantum_model(n_qubits, l, depth):
     """Create a QNN model circuit and readout operation to go along with it."""
-    data_qubits = cirq.GridQubit.rect(n_qubits, 1)  # a 4x4 grid.
+    data_qubits = cirq.GridQubit.rect(n_qubits * l, 1)  # a 4x4 grid.
     circuit = cirq.Circuit()
 
     builder = CircuitLayerBuilder(
@@ -112,7 +106,7 @@ def create_quantum_model(n_qubits, depth):
     for i in range(depth):
         builder.rot_layer(circuit, cirq.rz, "rz" + str(i))
         builder.rot_layer(circuit, cirq.ry, "ry" + str(i))
-        builder.entangling_layer(circuit, n_qubits)
+        builder.entangling_layer(circuit, n_qubits, l)
 
     return circuit
 
@@ -199,41 +193,52 @@ def main():
     dataset = args[0]
     encoder = args[1]
     n_qubits = int(args[2])
-    depth = args[3]
+    depth = int(args[3])
+
+    datapoints = -1
 
 
     dim, x_train, y_train, x_test, y_test = prepare_dataset(dataset)
+    y_train = y_train[0:datapoints]
+    y_test = y_test[0:datapoints]
 
-    x_train_bin = np.array(x_train, dtype=np.float32)
-    x_test_bin = np.array(x_test, dtype=np.float32)
+    if dim % n_qubits != 0:
+        raise ValueError('Error: dim % n_qubits != 0')
+
+    l = int(dim/n_qubits)
+
+    x_train_bin = np.array(x_train, dtype=np.float32).reshape(-1, dim)[0:datapoints]
+    x_test_bin = np.array(x_test, dtype=np.float32).reshape(-1, dim)[0:datapoints]
 
     print(x_train_bin)
-    print(x_train_bin.shape)
-    print(x_train_bin.reshape(10409, 4, 4))
 
     # choose method of encoding data for use in quantum classifier
     encode_function = select_encoding_method(encoder)
 
-    if (dim % n_qubits != 0):
-        print('error: dimension not divisible by qubits')
-        return
-    
+    qubits = [cirq.GridQubit(i, 0) for i in range(dim)]
 
-    n_qubits *= dim/n_qubits
-    qubits = [cirq.GridQubit(i, 0) for i in range(n_qubits)]
-
-    x_train_circ = [encode_function(n_qubits, x) for x in x_train_bin]
-    x_test_circ = [encode_function(n_qubits, x) for x in x_test_bin]
+    x_train_circ = [encode_function(dim, qubits, x) for x in x_train_bin]
+    x_test_circ = [encode_function(dim, qubits, x) for x in x_test_bin]
 
     x_train_tfcirc = tfq.convert_to_tensor(x_train_circ)
     x_test_tfcirc = tfq.convert_to_tensor(x_test_circ)
 
-    model_circuit = create_quantum_model(n_qubits, qubits, depth)
+    model_circuit = create_quantum_model(n_qubits, l, depth)
 
     print(model_circuit.to_text_diagram(transpose=False))
 
     ops = [cirq.Z(q) for q in qubits]
-    observables = [reduce((lambda x, y: x * y), ops)]
+
+    observables_l = [ops[x:x + n_qubits] for x in range(l)]
+
+    observables = []
+
+    for observable in observables_l:
+        observables.append([reduce((lambda x, y: x * y), observable)])
+
+    # do not remove
+    observables = reduce((lambda x, y: x + y), observables)
+    observables = reduce((lambda x, y: x + y), observables)
 
     output_layer = tfq.layers.PQC(model_circuit, observables)
 
@@ -258,7 +263,7 @@ def main():
 
     qnn_history = model.fit(
         x_train_tfcirc, y_train_hinge,
-        batch_size=32,
+        batch_size=128,
         epochs=10,
         verbose=1,
         validation_data=(x_test_tfcirc, y_test_hinge))
