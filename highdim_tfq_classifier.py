@@ -156,8 +156,8 @@ def create_mnist_dataset(pixels):
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
     x_train, x_test = x_train[..., np.newaxis] / \
         255.0, x_test[..., np.newaxis]/255.0
-    x_train, y_train = filter_mnist(x_train, y_train, 2, 4)
-    x_test, y_test = filter_mnist(x_test, y_test, 2, 4)
+    x_train, y_train = filter_mnist(x_train, y_train, 0, 1)
+    x_test, y_test = filter_mnist(x_test, y_test, 0, 1)
     x_train_small = tf.image.resize(x_train, (pixels, pixels)).numpy()
     x_test_small = tf.image.resize(x_test, (pixels, pixels)).numpy()
     x_train_nocon, y_train_nocon = remove_contradicting(x_train_small, y_train)
@@ -233,7 +233,10 @@ def main():
 
     observables = []
 
-    for observable in observables_l:
+    alpha = []
+
+    for i, observable in enumerate(observables_l):
+        alpha.append(sympy.Symbol('alpha'+str(i)))
         observables.append([reduce((lambda x, y: x * y), observable)])
 
     # do not remove
@@ -254,7 +257,7 @@ def main():
 
     model.compile(
         loss=tf.keras.losses.Hinge(),
-        optimizer=tf.keras.optimizers.Adam(),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.1),
         metrics=[hinge_accuracy])
 
     print(model.summary())
@@ -263,7 +266,7 @@ def main():
 
     qnn_history = model.fit(
         x_train_tfcirc, y_train_hinge,
-        batch_size=128,
+        batch_size=32,
         epochs=10,
         verbose=1,
         validation_data=(x_test_tfcirc, y_test_hinge))
