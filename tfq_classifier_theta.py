@@ -80,7 +80,7 @@ def u_encode_rot(n_qubits, x):
     for i in range(len(x)):
         for k in range(int(n_qubits / 2)):
             if k % 2 == 0:
-                circuit.append(cirq.ry(x[i] * 2 * math.pi)(qubits[i*int(n_qubits / 2) + k]))
+                circuit.append(cirq.ry(x[i] * 2 * math.pi)(qubits[i * int(n_qubits / 2) + k]))
             else:
                 circuit.append(cirq.rz(x[i] * 2 * math.pi)(qubits[i * int(n_qubits / 2) + k]))
     return circuit
