@@ -230,8 +230,9 @@ def main():
     model_concat = keras.layers.concatenate([layer.output for layer in quantum_layers], axis=-1)
 
     # add layer for simple addition with equal weight and no trainable parameters
-    model_concat = tf.keras.layers.Flatten()(model_concat)
-    model_concat = tf.reduce_sum(model_concat, axis=1)
+    model_concat = tf.keras.layers.Dense(l, activation='relu')(model_concat)
+    model_concat = tf.keras.layers.Dense(1, activation='tanh')(model_concat)
+
 
     # give all inputs of all l "blocks" to the model
     model = keras.Model(inputs=[layer.input for layer in quantum_layers], outputs=model_concat)
@@ -253,15 +254,16 @@ def main():
         verbose=1,
         validation_data=(x_test_tfcirc, y_test_hinge))
 
-    qnn_score = model.evaluate(x_test_tfcirc, y_test_hinge)
+    qnn_score = model.evaluate(x_test_tfcirc, y_test)
 
-
+    # print(model.predict(x_test_tfcirc))
+    # print(y_test)
 
     print("accuracy and val_accuracy:")
     print(qnn_history.history['hinge_accuracy'])
     print(qnn_history.history['val_hinge_accuracy'])
 
-    f = open('accuracy_simple_summation_8x8_4qubits_mnist_' + str(datapoints) + 'datapoints.txt', 'a+')
+    f = open('accuracy_NN_8x8_4qubits_mnist_' + str(datapoints) + 'datapoints.txt', 'a+')
     f.write(str(qnn_history.history['hinge_accuracy']) + "\n")
     f.write(str(qnn_history.history['val_hinge_accuracy']) + "\n")
     f.close()
